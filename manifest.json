@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "FB Group Contact Collector",
+  "name_localized": "איסוף פרטי מבקשי הצטרפות לקבוצת פייסבוק",
+  "version": "1.0.0",
+  "description": "Collect names, emails and phone numbers from Facebook group membership requests",
+  "permissions": ["activeTab", "clipboardWrite"],
+  "icons": {
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://www.facebook.com/groups/*/member-requests*",
+        "https://www.facebook.com/groups/*/membership_questions*",
+        "https://www.facebook.com/groups/*/pending*",
+        "https://www.facebook.com/groups/*/member_requests*"
+      ],
+      "js": ["content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

@@ -45,12 +45,11 @@
   }
 
   function findPhone(text) {
-    // Israeli phone patterns: 05X-XXXXXXX, 05XXXXXXXX, +972...
     const patterns = [
-      /(?:0[2-9]\d[\s\-.]?\d{3}[\s\-.]?\d{4})/,
-      /(?:0[2-9]\d{8})/,
-      /(?:\+972[\s\-.]?\d[\s\-.]?\d{3}[\s\-.]?\d{4})/,
-      /(?:\+?\d[\d\s\-().]{7,}\d)/
+      /0[2-9]\d[\s\-.]?\d{3}[\s\-.]?\d{4}/,
+      /0[2-9]\d{8}/,
+      /\+972[\s\-.]?\d[\s\-.]?\d{3}[\s\-.]?\d{4}/,
+      /\+?\d[\d\s\-().]{7,}\d/
     ];
     for (const p of patterns) {
       const m = text.match(p);
@@ -69,149 +68,101 @@
     const seen = new Set();
     const today = todayStr();
     const mainContent = document.querySelector('[role="main"]') || document.body;
+    const fullPageText = mainContent.innerText || '';
 
-    // Strategy: Find all "אשר" (Approve) buttons — each one belongs to a request card
-    // We look for buttons with text "אשר" or "Approve"
-    const allButtons = mainContent.querySelectorAll('div[role="button"], button');
-    const approveButtons = [];
+    // ── Strategy: Text-based parsing ──
+    // Split the page text into sections per request card
+    // Each card has: Name, timestamp, mutual friends info, Q&A answers, אשר/דחה buttons
     
-    allButtons.forEach(b => {
-      const text = (b.textContent || '').trim();
-      if (text === 'אשר' || text === 'Approve' || text === 'אשר הכל') {
-        // Skip "אשר הכל" (Approve All)
-        if (text === 'אשר הכל' || text === 'Approve all') return;
-        if (text === 'אשר' || text === 'Approve') {
-          approveButtons.push(b);
-        }
+    // Split by "אשר" button text which appears for each card
+    // Pattern: each request ends with אשר + דחה buttons
+    
+    const lines = fullPageText.split('\n').map(l => l.trim()).filter(Boolean);
+    
+    console.log(`[FBCollector] Total lines: ${lines.length}`);
+    
+    // Find indices of "אשר" lines (each marks end of a request card area)
+    // But "אשר הכל" is the bulk approve button, skip it
+    const approveIndices = [];
+    lines.forEach((line, i) => {
+      if (line === 'אשר' || line === 'Approve') {
+        approveIndices.push(i);
       }
     });
+    
+    console.log(`[FBCollector] Found ${approveIndices.length} request markers`);
 
-    console.log(`[FBCollector] Found ${approveButtons.length} approve buttons`);
-
-    approveButtons.forEach((approveBtn, idx) => {
-      // Walk up to find the request card container
-      // The card should contain: name, questions/answers, approve/decline buttons
-      let card = approveBtn;
-      for (let i = 0; i < 15; i++) {
-        if (!card.parentElement) break;
-        card = card.parentElement;
-        // A request card is typically tall enough to contain all the info
-        if (card.offsetHeight > 200 && card.offsetWidth > 300) break;
-      }
-
-      const fullText = card.innerText || '';
+    // For each approve marker, look backwards to find name, email, phone
+    approveIndices.forEach((approveIdx, cardNum) => {
+      // Get the text block for this card (from previous approve to this one)
+      const startIdx = cardNum > 0 ? approveIndices[cardNum - 1] + 1 : 0;
+      const cardLines = lines.slice(startIdx, approveIdx);
+      const cardText = cardLines.join('\n');
       
-      // Find name: Look for links that are profile links
-      // The name is typically in a bold/strong link near the top of the card
+      console.log(`[FBCollector] Card ${cardNum + 1} lines:`, cardLines.slice(0, 5));
+      
+      // Find email and phone in card text
+      const email = findEmail(cardText);
+      const phone = findPhone(cardText);
+      
+      // Find name: look for a line that looks like a person's name
+      // It's typically one of the first lines, short, no special chars
+      // Often followed by "שלחה/שלח לך בקשת חברות" or timestamp
       let name = '';
       
-      // Try: find <a> tags with href containing profile info, get their text
-      const links = card.querySelectorAll('a');
-      for (const link of links) {
-        const href = link.getAttribute('href') || '';
-        const linkText = link.textContent.trim();
-        // Profile links usually contain /user/ or just the person's name
-        // Skip short/empty text and navigation links
-        if (linkText.length >= 2 && linkText.length <= 50 && 
-            !linkText.includes('קבוצ') && !linkText.includes('חבר') &&
-            !linkText.includes('http') && !linkText.includes('@') &&
-            !/\d{5,}/.test(linkText)) {
-          // Check if this looks like a name (not a group name or UI element)
-          if (href.includes('/user/') || href.includes('profile.php') || 
-              href.includes('facebook.com/') || link.querySelector('strong, span')) {
-            name = linkText;
+      for (const line of cardLines) {
+        // Remove "שלחה/שלח לך בקשת חברות" suffix if present
+        let cleanLine = line
+          .replace(/\s*שלח[הו]?\s*לך\s*בקשת\s*חברות\.?/g, '')
+          .replace(/\s*sent\s*(you\s*)?a?\s*membership\s*request\.?/gi, '')
+          .trim();
+        
+        // Check if this looks like a name
+        if (cleanLine.length >= 2 && cleanLine.length <= 50 &&
+            !cleanLine.includes('@') && 
+            !/\d{4,}/.test(cleanLine) &&
+            !cleanLine.includes('בקשות') &&
+            !cleanLine.includes('חברים') &&
+            !cleanLine.includes('קבוצות') &&
+            !cleanLine.includes('הצטרפות') &&
+            !cleanLine.includes('לפני') &&
+            !cleanLine.includes('מסכים') &&
+            !cleanLine.includes('אשר') &&
+            !cleanLine.includes('דחה') &&
+            !cleanLine.includes('סננים') &&
+            !cleanLine.includes('שאלות') &&
+            !cleanLine.includes('ניקוי') &&
+            !cleanLine.includes('החדשות') &&
+            !cleanLine.includes('מידע') &&
+            !cleanLine.includes('כדי') &&
+            !cleanLine.includes('אנחנו') &&
+            !cleanLine.includes('יש לנו') &&
+            !cleanLine.includes('השאירו') &&
+            !cleanLine.includes('רלוונטי') &&
+            !cleanLine.includes('עדכונים') &&
+            !cleanLine.includes('מפיצים') &&
+            !cleanLine.includes('כללי') &&
+            !cleanLine.includes('תשובה') &&
+            !cleanLine.includes('Facebook') &&
+            !cleanLine.includes('אין תשובה') &&
+            !cleanLine.includes('משותפ') &&
+            !cleanLine.includes('נוספות') &&
+            cleanLine !== 'לא נקרא') {
+          // Extra check: names typically have 1-4 words
+          const words = cleanLine.split(/\s+/);
+          if (words.length >= 1 && words.length <= 5) {
+            name = cleanLine;
             break;
           }
         }
       }
-
-      // Fallback: try to find name from strong/heading elements
-      if (!name) {
-        const strongs = card.querySelectorAll('strong, h3, h4, [role="heading"]');
-        for (const s of strongs) {
-          const t = s.textContent.trim();
-          if (t.length >= 2 && t.length <= 50 && !t.includes('@') && !/\d{5,}/.test(t)) {
-            name = t;
-            break;
-          }
-        }
-      }
-
+      
       if (!name || seen.has(name)) return;
-
-      const email = findEmail(fullText);
-      const phone = findPhone(fullText);
-
+      
       seen.add(name);
       results.push({ name, email, phone, date: today });
-      console.log(`[FBCollector] #${idx+1}: ${name} | ${email} | ${phone}`);
+      console.log(`[FBCollector] ✅ ${name} | ${email} | ${phone}`);
     });
-
-    // Strategy 2: If no approve buttons found, try text-based scanning
-    if (results.length === 0) {
-      console.log('[FBCollector] Strategy 1 failed, trying text scan...');
-      
-      // Split page content into chunks by looking for name-like patterns
-      // followed by email/phone patterns
-      const textContent = mainContent.innerText || '';
-      const lines = textContent.split('\n').map(l => l.trim()).filter(Boolean);
-      
-      let currentName = '';
-      let currentEmail = '';
-      let currentPhone = '';
-      
-      for (const line of lines) {
-        const email = findEmail(line);
-        const phone = findPhone(line);
-        
-        if (email) currentEmail = email;
-        if (phone) currentPhone = phone;
-        
-        // Detect "אשר" button text as card separator
-        if (line === 'אשר' || line === 'דחה') {
-          if (currentName && (currentEmail || currentPhone) && !seen.has(currentName)) {
-            seen.add(currentName);
-            results.push({ name: currentName, email: currentEmail, phone: currentPhone, date: today });
-          }
-          // Don't reset name here — it comes before the buttons
-        }
-        
-        // Detect "בקשות" (requests) header as separator between cards
-        if (line.includes('לפני') && line.includes('שעות') || 
-            line.includes('לפני') && line.includes('ימים') ||
-            line.includes('לפני') && line.includes('דקות')) {
-          // This is the timestamp line — the name should be just before it
-          // Reset for next card
-          if (currentName && (currentEmail || currentPhone) && !seen.has(currentName)) {
-            seen.add(currentName);
-            results.push({ name: currentName, email: currentEmail, phone: currentPhone, date: today });
-          }
-          currentEmail = '';
-          currentPhone = '';
-        }
-        
-        // A name-like line: short, no special chars, appears before questions
-        if (line.length >= 2 && line.length <= 40 && 
-            !line.includes('@') && !/\d{4,}/.test(line) &&
-            !line.includes('אשר') && !line.includes('דחה') &&
-            !line.includes('חבר') && !line.includes('קבוצ') &&
-            !line.includes('לפני') && !line.includes('הצטרפ') &&
-            !line.includes('סננים') && !line.includes('שאלות') &&
-            !line.includes('מסכים') && !line.includes('תשובה') &&
-            !line.includes('ניקוי') && !line.includes('החדשות') &&
-            !line.includes('מידע') && !line.includes('יש לנו') &&
-            !line.includes('אחת') && !line.includes('כדי') &&
-            !line.includes('השאירו') && !line.includes('בקשות')) {
-          currentName = line;
-        }
-      }
-      
-      // Push last
-      if (currentName && (currentEmail || currentPhone) && !seen.has(currentName)) {
-        seen.add(currentName);
-        results.push({ name: currentName, email: currentEmail, phone: currentPhone, date: today });
-      }
-    }
 
     return results;
   }
@@ -309,12 +260,12 @@
     btn.textContent = '📥 איסוף פרטים';
 
     if (data.length === 0) {
-      alert('לא נמצאו בקשות.\n\nפתח את Console (F12) וחפש [FBCollector] לפרטים.');
+      alert('לא נמצאו בקשות.\n\nפתח Console (F12 → Console) וחפש [FBCollector] לפרטי debug.');
       return;
     }
 
     showModal(data);
   });
 
-  console.log('[FB Group Collector] Loaded ✓ — v2');
+  console.log('[FB Group Collector] Loaded ✓ — v3');
 })();
